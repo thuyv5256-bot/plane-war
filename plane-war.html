@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>飞机大战</title>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; overflow: hidden; background: #061225; color: #eef7ff; font-family: "Microsoft YaHei", system-ui, sans-serif; }
+    .shell { width: min(100vw, 480px); height: min(100vh, 820px); position: relative; overflow: hidden; background: radial-gradient(circle at 50% 0%, #153b70, #061225 58%); box-shadow: 0 0 40px #000a; }
+    #game { display: block; width: 100%; height: 100%; touch-action: none; }
+    .hud { position: absolute; top: 18px; left: 18px; right: 18px; display: flex; gap: 8px; justify-content: space-between; pointer-events: none; font-weight: 800; text-shadow: 0 2px 4px #001; }
+    .card { padding: 8px 12px; border: 1px solid #83cfff70; border-radius: 10px; background: #061b38aa; backdrop-filter: blur(4px); }
+    #lives { color: #ff7897; letter-spacing: 2px; }
+    .tip { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 90%; padding: 7px 12px; border-radius: 99px; background: #061b38a8; color: #b9d9ff; font-size: 12px; pointer-events: none; }
+    .overlay { position: absolute; inset: 0; display: grid; place-items: center; padding: 30px; background: #061225b8; text-align: center; }
+    .panel { width: min(100%, 320px); padding: 30px 22px; border: 1px solid #67c6ff80; border-radius: 20px; background: #0a2345e8; box-shadow: 0 10px 50px #0008; }
+    h1 { margin: 0 0 10px; color: #79d5ff; font-size: 34px; letter-spacing: 6px; }
+    p { color: #c4dcf9; line-height: 1.7; font-size: 14px; }
+    button { width: 100%; margin-top: 12px; border: 0; border-radius: 10px; padding: 13px; background: linear-gradient(135deg, #39bafa, #2674e8); color: white; cursor: pointer; font: inherit; font-weight: 800; box-shadow: 0 5px 16px #0756b080; }
+    button:active { transform: translateY(1px); }
+    .secondary { background: transparent; border: 1px solid #67c6ff80; box-shadow: none; }
+    #levelPicker { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 14px; }
+    #levelPicker button { margin: 0; padding: 10px 6px; font-size: 13px; }
+    #levelPicker button:disabled { cursor: not-allowed; background: #17304b; color: #7091ae; box-shadow: none; }
+    #skillsPanel { margin-top: 14px; text-align: left; }
+    .skill { padding: 11px; margin-bottom: 8px; border: 1px solid #67c6ff55; border-radius: 10px; background: #061a34; }
+    .skill strong { color: #7edbff; }
+    .skill small { display: block; margin: 4px 0; color: #a8c5e5; }
+    .skill button { width: auto; margin: 0; padding: 7px 11px; float: right; font-size: 12px; }
+    .points { color: #ffd477; font-weight: 800; }
+    #pause { width: auto; margin: 0; padding: 8px 12px; pointer-events: auto; background: #174775d9; font-size: 14px; box-shadow: none; }
+    #restart { width: auto; margin: 0; padding: 8px 12px; pointer-events: auto; background: #84334bd9; font-size: 14px; box-shadow: none; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <canvas id="game" aria-label="飞机大战游戏画面"></canvas>
+    <div class="hud"><div class="card">第 <span id="level">1</span> 关 · 积分：<span id="score">0</span>/<span id="target">100</span></div><div class="card">生命：<span id="lives">♥ ♥ ♥ ♥ ♥</span></div><button id="restart" class="hidden" type="button">重新开始</button><button id="pause" type="button">暂停</button></div>
+    <div class="tip">右键切换跟随/锁定 · 鼠标/手指移动战机 · 方向键 / WASD 也可移动</div>
+    <div id="overlay" class="overlay"><section class="panel"><h1>飞机大战</h1><p>躲避敌机与子弹，战机将自动开火。敌人会随时间不断增多。</p><div id="levelPicker" class="hidden"></div><div id="skillsPanel" class="hidden"></div><button id="start">开始游戏</button><button id="choose" class="secondary">选择关卡</button><button id="skills" class="secondary">成长技能</button></section></div>
+  </main>
+  <script>
+    const canvas = document.querySelector('#game'), ctx = canvas.getContext('2d');
+    const scoreEl = document.querySelector('#score'), livesEl = document.querySelector('#lives'), levelEl = document.querySelector('#level'), targetEl = document.querySelector('#target'), pauseBtn = document.querySelector('#pause'), restartBtn = document.querySelector('#restart');
+    const overlay = document.querySelector('#overlay'), startBtn = document.querySelector('#start'), chooseBtn = document.querySelector('#choose'), levelPicker = document.querySelector('#levelPicker'), skillsBtn = document.querySelector('#skills'), skillsPanel = document.querySelector('#skillsPanel');
+    let W, H, scale, running, paused, mouseFollow, last, elapsed, score, lives, level, unlockedLevel, skillPoints, skills, player, targetPoint, enemies, shots, enemyShots, stars, keys, spawnClock, fireClock, invincible;
+    const fit = () => { const r = canvas.getBoundingClientRect(); scale = devicePixelRatio || 1; W = r.width; H = r.height; canvas.width = W * scale; canvas.height = H * scale; ctx.setTransform(scale,0,0,scale,0,0); };
+    addEventListener('resize', fit); fit();
+    const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
+    const hit = (a,b) => Math.abs(a.x-b.x) < (a.w+b.w)/2 && Math.abs(a.y-b.y) < (a.h+b.h)/2;
+    const targetFor = n => 100 * 2 ** (n - 1);
+    function refreshLevel() { levelEl.textContent=level; targetEl.textContent=targetFor(level); }
+    function reset(startLevel=1) { elapsed=spawnClock=fireClock=invincible=0; mouseFollow=true; level=startLevel; score=level===1?0:targetFor(level-1); lives=5+skills.hull; enemies=[]; shots=[]; enemyShots=[]; keys={}; player={x:W/2,y:H-78,w:32,h:42,speed:560}; targetPoint={x:player.x,y:player.y}; if(level===2)spawnBoss(); stars=Array.from({length:75},()=>({x:Math.random()*W,y:Math.random()*H,s:Math.random()*2+0.5})); scoreEl.textContent=score; livesEl.textContent='♥ '.repeat(lives); refreshLevel(); }
+    function earn(points) { score+=points; skillPoints+=points; localStorage.setItem('planeWarSkillPoints',skillPoints); scoreEl.textContent=score; }
+    function spawnEnemy() { const size=28+Math.random()*7; enemies.push({x:25+Math.random()*(W-50),y:-35,w:size,h:size*1.05,vy:75+Math.random()*55+elapsed*1.7,fire:0.6+Math.random()*1.4}); }
+    function spawnBoss() { enemies.push({boss:true,x:W/2,y:-70,w:142,h:96,vy:105,vx:105,hp:50,maxHp:50,fire:1.1}); }
+    function drawShip(o, enemy=false) { ctx.save(); ctx.translate(o.x,o.y); ctx.fillStyle=enemy?'#ff4c6a':'#4fd4ff'; ctx.beginPath(); ctx.moveTo(0,-o.h/2); ctx.lineTo(o.w/2,o.h/2); ctx.lineTo(0,o.h/4); ctx.lineTo(-o.w/2,o.h/2); ctx.closePath(); ctx.fill(); ctx.fillStyle=enemy?'#ffd1d9':'#dff8ff'; ctx.fillRect(-4,-o.h*.12,8,o.h*.28); ctx.restore(); }
+    function draw() { ctx.clearRect(0,0,W,H); ctx.fillStyle='#071a33'; ctx.fillRect(0,0,W,H); ctx.fillStyle='#b9e7ff'; for(const s of stars){ctx.globalAlpha=.25+s.s/5;ctx.fillRect(s.x,s.y,s.s,s.s*2)} ctx.globalAlpha=1;
+      for(const b of shots){ctx.fillStyle='#79efff';ctx.fillRect(b.x-2,b.y-10,4,13)} for(const b of enemyShots){ctx.fillStyle='#ff7390';ctx.beginPath();ctx.arc(b.x,b.y,4,0,Math.PI*2);ctx.fill()}
+      enemies.forEach(e=>{ if(e.boss){ctx.save();ctx.translate(e.x,e.y);ctx.fillStyle='#a83367';ctx.fillRect(-e.w*.16,-e.h*.45,e.w*.32,e.h*.9);ctx.fillStyle='#ff5476';ctx.beginPath();ctx.moveTo(0,-e.h/2);ctx.lineTo(e.w/2,e.h*.36);ctx.lineTo(e.w*.16,e.h*.22);ctx.lineTo(0,e.h/2);ctx.lineTo(-e.w*.16,e.h*.22);ctx.lineTo(-e.w/2,e.h*.36);ctx.closePath();ctx.fill();ctx.fillStyle='#ffd9e3';ctx.fillRect(-12,-e.h*.12,24,e.h*.25);ctx.restore();ctx.fillStyle='#1b0921';ctx.fillRect(e.x-e.w/2,e.y-e.h/2-14,e.w,6);ctx.fillStyle='#ff4f78';ctx.fillRect(e.x-e.w/2,e.y-e.h/2-14,e.w*(e.hp/e.maxHp),6);}else drawShip(e,true); }); if(!invincible || Math.floor(invincible*12)%2===0) drawShip(player); }
+    function startGame(startLevel=1) { reset(startLevel); running=true; paused=false; pauseBtn.textContent='暂停'; restartBtn.classList.add('hidden'); overlay.classList.add('hidden'); last=performance.now(); requestAnimationFrame(loop); }
+    function nextLevel() { level++; elapsed=0; enemies=[]; shots=[]; enemyShots=[]; spawnClock=.5; if(level===2)spawnBoss(); refreshLevel(); paused=false; pauseBtn.textContent='暂停'; restartBtn.classList.add('hidden'); overlay.classList.add('hidden'); }
+    function menu() { levelPicker.classList.add('hidden'); skillsPanel.classList.add('hidden'); startBtn.classList.remove('hidden'); chooseBtn.classList.remove('hidden'); skillsBtn.classList.remove('hidden'); chooseBtn.textContent='选择关卡'; skillsBtn.textContent='成长技能'; }
+    function gameOver() { running=false; paused=false; pauseBtn.textContent='暂停'; restartBtn.classList.add('hidden'); overlay.classList.remove('hidden'); menu(); overlay.querySelector('h1').textContent='任务失败'; overlay.querySelector('p').innerHTML=`最终积分：<strong>${score}</strong><br>再试一次，突破更高分！`; startBtn.textContent='重新开始'; startBtn.onclick=()=>startGame(1); }
+    function levelClear() { paused=true; pauseBtn.textContent='继续'; restartBtn.classList.add('hidden'); if(level<10&&unlockedLevel<level+1){unlockedLevel=level+1;localStorage.setItem('planeWarUnlockedLevel',unlockedLevel);} overlay.classList.remove('hidden'); menu(); const final=level===10; overlay.querySelector('h1').textContent=final?'全部通关！':`第 ${level} 关通关！`; overlay.querySelector('p').innerHTML=final?`最终积分：<strong>${score}</strong><br>你已完成全部十个关卡！`:`目标达成：<strong>${score} 分</strong><br>下一关目标：${targetFor(level+1)} 分`; startBtn.textContent=final?'再来一局':'进入下一关'; startBtn.onclick=final?()=>startGame(1):nextLevel; }
+    function update(dt) { elapsed+=dt; for(const s of stars){s.y+=(25+s.s*22)*dt;if(s.y>H){s.y=-3;s.x=Math.random()*W}}
+      let dx=(keys.ArrowRight||keys.d?1:0)-(keys.ArrowLeft||keys.a?1:0), dy=(keys.ArrowDown||keys.s?1:0)-(keys.ArrowUp||keys.w?1:0);
+      if(dx||dy){const m=Math.hypot(dx,dy);player.x+=dx/m*player.speed*dt;player.y+=dy/m*player.speed*dt;targetPoint.x=player.x;targetPoint.y=player.y}
+      else { const ax=targetPoint.x-player.x, ay=targetPoint.y-player.y, distance=Math.hypot(ax,ay), step=player.speed*dt; if(distance>1){player.x+=ax/distance*Math.min(step,distance);player.y+=ay/distance*Math.min(step,distance);} }
+      player.x=clamp(player.x,player.w/2,W-player.w/2);player.y=clamp(player.y,H*.36,H-player.h/2);
+      const bossAlive=level===2&&enemies.some(e=>e.boss); spawnClock-=dt; const interval=Math.max(.22,.95-elapsed*.012); if(!bossAlive&&spawnClock<=0){spawnEnemy();spawnClock=interval; if(elapsed>35&&Math.random()<.34)spawnEnemy();}
+      fireClock-=dt;if(fireClock<=0){shots.push({x:player.x,y:player.y-player.h/2});fireClock=Math.max(.07,.18-skills.rapid*.03)} invincible=Math.max(0,invincible-dt);
+      shots.forEach(b=>b.y-=520*dt); shots=shots.filter(b=>b.y>-20); enemyShots.forEach(b=>b.y+=b.vy*dt); enemyShots=enemyShots.filter(b=>b.y<H+20);
+      enemies.forEach(e=>{ if(e.boss){if(e.y<125)e.y=Math.min(125,e.y+e.vy*dt);else{e.x+=e.vx*dt;if(e.x<e.w/2||e.x>W-e.w/2){e.x=clamp(e.x,e.w/2,W-e.w/2);e.vx*=-1;}}}else e.y+=e.vy*dt;e.fire-=dt;if(e.fire<=0){if(e.boss){[-.22,0,.22].forEach(offset=>enemyShots.push({x:e.x+offset*e.w,y:e.y+e.h/2,w:9,h:9,vy:225}));e.fire=.8;}else{enemyShots.push({x:e.x,y:e.y+e.h/2,w:8,h:8,vy:185+elapsed*2});e.fire=.9+Math.random()*1.3;}}}); enemies=enemies.filter(e=>e.boss||e.y<H+60);
+      for(let i=enemies.length-1;i>=0;i--){const e=enemies[i]; for(let j=shots.length-1;j>=0;j--) if(hit(e,{...shots[j],w:5,h:16})){shots.splice(j,1);if(e.boss){e.hp--;if(e.hp<=0){enemies.splice(i,1);earn(100);}}else{enemies.splice(i,1);earn(10);}break;}}
+      if(score>=targetFor(level)){levelClear();return;}
+      if(!invincible){ let struck=enemies.some(e=>hit(player,e)) || enemyShots.some(b=>hit(player,b)); if(struck){lives--; livesEl.textContent='♥ '.repeat(lives); invincible=1.1; enemyShots=[]; if(lives<=0)gameOver();}}
+    }
+    function loop(t){if(!running)return;const dt=Math.min(.035,(t-last)/1000||0);last=t;if(!paused)update(dt);draw();requestAnimationFrame(loop)}
+    unlockedLevel=Math.max(1,Math.min(10,Number(localStorage.getItem('planeWarUnlockedLevel'))||1));
+    skillPoints=Math.max(0,Number(localStorage.getItem('planeWarSkillPoints'))||0);
+    try { skills={rapid:0,hull:0,...JSON.parse(localStorage.getItem('planeWarSkills')||'{}')}; } catch { skills={rapid:0,hull:0}; }
+    startBtn.onclick=()=>startGame(1);
+    chooseBtn.onclick=()=>{if(!levelPicker.classList.contains('hidden')){menu();return;}levelPicker.innerHTML='';for(let i=1;i<=10;i++){const b=document.createElement('button');b.textContent=i<=unlockedLevel?`第 ${i} 关`:'🔒 未解锁';b.disabled=i>unlockedLevel;b.onclick=()=>startGame(i);levelPicker.appendChild(b);}levelPicker.classList.remove('hidden');startBtn.classList.add('hidden');chooseBtn.textContent='返回主菜单';};
+    function saveSkills(){localStorage.setItem('planeWarSkills',JSON.stringify(skills));localStorage.setItem('planeWarSkillPoints',skillPoints);}
+    function renderSkills(){const rapidCost=100*(skills.rapid+1), hullCost=150*(skills.hull+1);skillsPanel.innerHTML=`<p>可用技能积分：<span class="points">${skillPoints}</span></p><div class="skill"><button data-skill="rapid" ${skills.rapid>=3||skillPoints<rapidCost?'disabled':''}>${skills.rapid>=3?'已满级':rapidCost+' 积分'}</button><strong>连射强化 ${skills.rapid}/3</strong><small>提升自动射击频率。</small></div><div class="skill"><button data-skill="hull" ${skills.hull>=3||skillPoints<hullCost?'disabled':''}>${skills.hull>=3?'已满级':hullCost+' 积分'}</button><strong>机体强化 ${skills.hull}/3</strong><small>每级使初始生命 +1。</small></div>`;skillsPanel.querySelectorAll('button').forEach(b=>b.onclick=()=>{const type=b.dataset.skill,cost=type==='rapid'?rapidCost:hullCost;if(skillPoints<cost)return;skillPoints-=cost;skills[type]++;saveSkills();renderSkills();});}
+    skillsBtn.onclick=()=>{if(!skillsPanel.classList.contains('hidden')){menu();return;}levelPicker.classList.add('hidden');renderSkills();skillsPanel.classList.remove('hidden');startBtn.classList.add('hidden');chooseBtn.classList.add('hidden');skillsBtn.textContent='返回主菜单';};
+    pauseBtn.onclick=()=>{ if(!running) return; paused=!paused; pauseBtn.textContent=paused?'继续':'暂停'; restartBtn.classList.toggle('hidden',!paused); };
+    restartBtn.onclick=()=>startGame(level);
+    addEventListener('keydown',e=>{if(e.key==='p'||e.key==='P'){pauseBtn.click();return}if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','w','a','s','d'].includes(e.key)){keys[e.key]=true;e.preventDefault()}});addEventListener('keyup',e=>keys[e.key]=false);
+    const setTarget=e=>{if(!running||paused||!mouseFollow||e.button===2)return;const r=canvas.getBoundingClientRect(), p=e.touches?e.touches[0]:e;targetPoint.x=clamp(p.clientX-r.left,player.w/2,W-player.w/2);targetPoint.y=clamp(p.clientY-r.top,H*.36,H-player.h/2);player.x=targetPoint.x;player.y=targetPoint.y;}; canvas.addEventListener('pointerdown',setTarget);canvas.addEventListener('pointermove',setTarget);canvas.addEventListener('contextmenu',e=>{e.preventDefault();if(!running||paused)return;mouseFollow=!mouseFollow;targetPoint.x=player.x;targetPoint.y=player.y;}); draw();
+  </script>
+</body>
+</html>
